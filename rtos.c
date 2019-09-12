@@ -100,6 +100,13 @@ void rtos_start_scheduler(void)
 	SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_TICKINT_Msk
 	        | SysTick_CTRL_ENABLE_Msk;
 	reload_systick();
+
+	//Poner el reloj global en 0
+	//Llamar rtos create task(idles task, 0, auto start)
+	//while True do
+		//No hacer nada
+	//end while
+
 	for (;;)
 		;
 }
@@ -112,7 +119,7 @@ rtos_task_handle_t rtos_create_task(void (*task_body)(), uint8_t priority,
 
 rtos_tick_t rtos_get_clock(void)
 {
-	return 0;
+	return task_list.global_tick; //return valor del reloj del sistema
 }
 
 void rtos_delay(rtos_tick_t ticks)
@@ -122,7 +129,8 @@ void rtos_delay(rtos_tick_t ticks)
 
 void rtos_suspend_task(void)
 {
-
+	task_list.tasks[task_list.current_task].state=S_SUSPENDED;	//Pone la tarea que llamó esta función en estado suspendido
+	dispatcher(kFromNormalExec);	//Llama dispatcher(desde la tarea)
 }
 
 void rtos_activate_task(rtos_task_handle_t task)
@@ -143,7 +151,19 @@ static void reload_systick(void)
 
 static void dispatcher(task_switch_type_e type)
 {
-
+	//task_list.tasks[task_list.next_task].task_body = idle_task(); //siguiente tarea = tarea idle TODO
+	uint8_t prioridad_alta = 0;
+	for(uint8_t i=0;i<task_list.nTasks;i++){//for cada tarea en lista de tareas do
+		//if prioridad de tarea ¿prioridad mas alta y el estado de tarea es listo o corriendo then
+		if(task_list.tasks[i].priority > prioridad_alta & (task_list.tasks[i].state == S_READY | task_list.tasks[i].state == S_RUNNING)){
+			prioridad_alta = task_list.tasks[i].priority;	//prioridad mas alta = prioridad de tarea
+			task_list.next_task = task_list.current_task;//siguiente tarea = tarea
+		}//end if
+	}//end for
+	//if siguiente tarea diferente de tarea actual then
+	if(task_list.next_task != task_list.current_task){
+		context_switch(kFromNormalExec);	//context switch (desde la tarea)
+	}//end if
 }
 
 FORCE_INLINE static void context_switch(task_switch_type_e type)
@@ -153,7 +173,14 @@ FORCE_INLINE static void context_switch(task_switch_type_e type)
 
 static void activate_waiting_tasks()
 {
-
+	//for cada tarea en lista de tareas do
+		//if tarea en estado de espera then
+			//Disminuye en 1 el reloj local de la tarea
+			//if reloj local de la tarea en 0 then
+				//pone la tarea en estado ’listo’
+			//end if
+		//end if
+	//end for
 }
 
 /**********************************************************************************/
@@ -183,7 +210,7 @@ void SysTick_Handler(void)
 
 void PendSV_Handler(void)
 {
-
+	//Carga el stack pointer del procesador con el stack pointer de la tarea actual
 }
 
 /**********************************************************************************/
@@ -216,7 +243,7 @@ static void refresh_is_alive(void)
 	SysTick->VAL = 0;
 	if (RTOS_IS_ALIVE_PERIOD_IN_US / RTOS_TIC_PERIOD_IN_US - 1 == count)
 	{
-		GPIO_WritePinOutput(alive_GPIO(RTOS_IS_ALIVE_PORT), RTOS_IS_ALIVE_PIN,
+		GPIO_PinWrite(alive_GPIO(RTOS_IS_ALIVE_PORT), RTOS_IS_ALIVE_PIN,
 		        state);
 		state = state == 0 ? 1 : 0;
 		count = 0;
