@@ -101,11 +101,8 @@ void rtos_start_scheduler(void)
 	        | SysTick_CTRL_ENABLE_Msk;
 	reload_systick();
 
-	//Poner el reloj global en 0
-	//Llamar rtos create task(idles task, 0, auto start)
-	//while True do
-		//No hacer nada
-	//end while
+	task_list.global_tick=0;	//Poner el reloj global en 0
+	//rtos_create_task(idle_task(),0,kAutoStart);	//Llamar rtos create task(idles task, 0, auto start)
 
 	for (;;)
 		;
@@ -124,6 +121,9 @@ rtos_tick_t rtos_get_clock(void)
 
 void rtos_delay(rtos_tick_t ticks)
 {
+	task_list.tasks[task_list.current_task].state=S_WAITING;	//Pone la tarea que llamó esta función en estado de espera
+	task_list.tasks[task_list.current_task].local_tick++;	//Asigna ticks a el reloj local de la tarea
+	dispatcher(kFromNormalExec);	//Llama dispatcher(desde la tarea)
 
 }
 
@@ -135,7 +135,8 @@ void rtos_suspend_task(void)
 
 void rtos_activate_task(rtos_task_handle_t task)
 {
-
+	task_list.tasks[task_list.current_task].state=S_READY;	//Pone la tarea que llamó esta función en estado listo
+	dispatcher(kFromNormalExec);	//Llama dispatcher(desde la tarea)
 }
 
 /**********************************************************************************/
@@ -152,16 +153,16 @@ static void reload_systick(void)
 static void dispatcher(task_switch_type_e type)
 {
 	//task_list.tasks[task_list.next_task].task_body = idle_task(); //siguiente tarea = tarea idle TODO
-	uint8_t prioridad_alta = 0;
+	uint8_t prioridad_mas_alta = 0;
 	for(uint8_t i=0;i<task_list.nTasks;i++){//for cada tarea en lista de tareas do
 		//if prioridad de tarea ¿prioridad mas alta y el estado de tarea es listo o corriendo then
-		if(task_list.tasks[i].priority > prioridad_alta & (task_list.tasks[i].state == S_READY | task_list.tasks[i].state == S_RUNNING)){
-			prioridad_alta = task_list.tasks[i].priority;	//prioridad mas alta = prioridad de tarea
-			task_list.next_task = task_list.current_task;//siguiente tarea = tarea
+		if(task_list.tasks[i].priority > prioridad_mas_alta & (task_list.tasks[i].state == S_READY | task_list.tasks[i].state == S_RUNNING)){
+			prioridad_mas_alta = task_list.tasks[i].priority;	//prioridad_mas_alta = prioridad_de_tarea
+			task_list.tasks[task_list.next_task] = task_list.tasks[i];//siguiente_tarea = tarea
 		}//end if
 	}//end for
 	//if siguiente tarea diferente de tarea actual then
-	if(task_list.next_task != task_list.current_task){
+	if(task_list.next_task  != task_list.current_task){
 		context_switch(kFromNormalExec);	//context switch (desde la tarea)
 	}//end if
 }
@@ -173,14 +174,16 @@ FORCE_INLINE static void context_switch(task_switch_type_e type)
 
 static void activate_waiting_tasks()
 {
-	//for cada tarea en lista de tareas do
+	for(uint8_t i=0;i<task_list.nTasks;i++){	//for cada tarea en lista de tareas do
 		//if tarea en estado de espera then
-			//Disminuye en 1 el reloj local de la tarea
+		if(task_list.tasks[i].state == S_WAITING ){
+			task_list.tasks[i].local_tick--;	//Disminuye en 1 el reloj local de la tarea
 			//if reloj local de la tarea en 0 then
-				//pone la tarea en estado ’listo’
-			//end if
-		//end if
-	//end for
+			if(0 == task_list.tasks[i].local_tick){
+				task_list.tasks[i].state = S_READY; //pone la tarea en estado ’listo’
+			}//end if
+		}//end if
+	}//end for
 }
 
 /**********************************************************************************/
@@ -204,8 +207,10 @@ void SysTick_Handler(void)
 #ifdef RTOS_ENABLE_IS_ALIVE
 	refresh_is_alive();
 #endif
-	activate_waiting_tasks();
+	task_list.global_tick++; //incrementa el reloj global en 1
+	activate_waiting_tasks();	//activate waiting tasks()
 	reload_systick();
+	dispatcher(kFromISR);	//dispatcher(desde interrupción);
 }
 
 void PendSV_Handler(void)
