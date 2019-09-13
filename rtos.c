@@ -108,7 +108,7 @@ void rtos_start_scheduler(void)
 		;
 }
 
-rtos_task_handle_t rtos_create_task(void (*task_body)(), uint8_t priority,
+rtos_task_handle_t rtos_create_task(void (*task_body)(), uint8_t priority, //TODO
 		rtos_autostart_e autostart)
 {
 	rtos_task_handle_t retval;
@@ -176,8 +176,7 @@ static void dispatcher(task_switch_type_e type)
 	}//end for
 	//if siguiente tarea diferente de tarea actual then
 	if(task_list.next_task  != task_list.current_task){
-		context_switch(kFromNormalExec);	//context switch (desde la tarea)
-		//context_switch(type);
+		context_switch(type);	//context switch (desde la tarea)
 	}//end if
 }
 
