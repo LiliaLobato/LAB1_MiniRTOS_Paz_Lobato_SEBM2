@@ -1,6 +1,9 @@
+#include <stdio.h>
 #include "board.h"
+#include "peripherals.h"
 #include "pin_mux.h"
 #include "clock_config.h"
+#include "MK64F12.h"
 #include "fsl_debug_console.h"
 
 #include "rtos.h"
@@ -40,7 +43,9 @@ void dummy_task3(void)
 
 int main(void)
 {
-	BOARD_InitPins();
+	BOARD_InitBootPins();
+	BOARD_InitBootClocks();
+	BOARD_InitBootPeripherals();
 	BOARD_BootClockRUN();
 	BOARD_InitDebugConsole();
 

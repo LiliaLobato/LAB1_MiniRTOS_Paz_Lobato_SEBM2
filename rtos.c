@@ -91,35 +91,39 @@ static void idle_task(void);
 /**********************************************************************************/
 // API implementation
 /**********************************************************************************/
+uint8_t g_idle_task_index = 0;
 
 void rtos_start_scheduler(void)
 {
 #ifdef RTOS_ENABLE_IS_ALIVE
 	init_is_alive();
 #endif
-	SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_TICKINT_Msk
-	        | SysTick_CTRL_ENABLE_Msk;
-	reload_systick();
-
 	task_list.global_tick=0;	//Poner el reloj global en 0
-	rtos_create_task(idle_task,0,kAutoStart);	//Llamar rtos create task(idles task, 0, auto start)
+	task_list.current_task=-1;	//No hay task ejecutando, se pone en -1
+	g_idle_task_index = rtos_create_task(idle_task,0,kAutoStart);	//Llamar rtos create task(idles task, 0, auto start)
+
+	SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk;
+	reload_systick();
 
 	for (;;)
 		;
 }
 
-rtos_task_handle_t rtos_create_task(void (*task_body)(), uint8_t priority, //TODO
+rtos_task_handle_t rtos_create_task(void (*task_body)(), uint8_t priority,
 		rtos_autostart_e autostart)
 {
 	rtos_task_handle_t retval;
-	if( RTOS_MAX_NUMBER_OF_TASKS -1 < task_list.nTasks){
+	if( RTOS_MAX_NUMBER_OF_TASKS -1 < task_list.nTasks){ //hay espacio en el task list?
 		retval=-1;
-	} else {
+	} else { //Se crea el stack
 		task_list.tasks[task_list.nTasks].state = autostart == kAutoStart ? S_READY : S_SUSPENDED;
 		task_list.tasks[task_list.nTasks].priority = priority;
 		task_list.tasks[task_list.nTasks].task_body=task_body;
 		task_list.tasks[task_list.nTasks].local_tick = 0;
 		task_list.tasks[task_list.nTasks].sp = &(task_list.tasks[task_list.nTasks].stack[RTOS_STACK_SIZE-1])-STACK_FRAME_SIZE;
+		task_list.tasks[task_list.nTasks].stack[RTOS_STACK_SIZE - STACK_LR_OFFSET] = (uint32_t) task_body;
+		task_list.tasks[task_list.nTasks].stack[RTOS_STACK_SIZE - STACK_PSR_OFFSET] = STACK_PSR_DEFAULT;
+
 		retval=task_list.nTasks;
 		task_list.nTasks++;
 	}
@@ -165,16 +169,17 @@ static void reload_systick(void)
 
 static void dispatcher(task_switch_type_e type)
 {
-	task_list.tasks[task_list.next_task].task_body = idle_task; //siguiente tarea = tarea idle TODO
-	uint8_t prioridad_mas_alta = 0;
-	for(uint8_t i=0;i<task_list.nTasks;i++){//for cada tarea en lista de tareas do
+	int8_t prioridad_mas_alta = -1;
+	uint8_t next_task_handler = task_list.nTasks-1; //siguiente tarea = tarea idle ROBAR SIN EL -1 o igualando a g_idle_task_index
+	for(uint8_t i=0;i<task_list.nTasks;i++){ //for cada tarea en lista de tareas do
 		//if prioridad de tarea ¿prioridad mas alta y el estado de tarea es listo o corriendo then
-		if(task_list.tasks[i].priority > prioridad_mas_alta & (task_list.tasks[i].state == S_READY | task_list.tasks[i].state == S_RUNNING)){
-			prioridad_mas_alta = task_list.tasks[i].priority;	//prioridad_mas_alta = prioridad_de_tarea
-			task_list.tasks[task_list.next_task] = task_list.tasks[i];//siguiente_tarea = tarea
+		if(task_list.tasks[i].priority > prioridad_mas_alta && (task_list.tasks[i].state == S_READY || task_list.tasks[i].state == S_RUNNING)){
+			prioridad_mas_alta = task_list.tasks[i].priority;// > prioridad_mas_alta;	//prioridad_mas_alta = prioridad_de_tarea
+			next_task_handler = i;//siguiente_tarea = tarea
 		}//end if
 	}//end for
 	//if siguiente tarea diferente de tarea actual then
+	task_list.next_task = next_task_handler;
 	if(task_list.next_task  != task_list.current_task){
 		context_switch(type);	//context switch (desde la tarea)
 	}//end if
@@ -182,7 +187,27 @@ static void dispatcher(task_switch_type_e type)
 
 FORCE_INLINE static void context_switch(task_switch_type_e type)
 {
+	static uint8_t CONTEXT_SWITCH_cont = 1;
 
+	register uint32_t r0 asm("sp");
+	(void) r0;
+
+	if(!CONTEXT_SWITCH_cont){ //Si NO es la primera vez aqui
+		//Almacena el SP actual en el stack de la tarea actual
+		asm("mov r0,r7");
+		task_list.tasks[task_list.current_task].sp = (uint32_t *)r0;
+		task_list.tasks[task_list.current_task].sp -=
+				kFromNormalExec == type ?
+						STACK_FRAME_SIZE+1 : //si viene desde la tarea
+						-(STACK_FRAME_SIZE-1)-2; //si viene de una interrucion
+
+	} else { //Si es la primera vez aqui
+		CONTEXT_SWITCH_cont = 0;
+	}
+
+	task_list.current_task = task_list.next_task; //Cambia tarea actul por siguiente tarea
+	task_list.tasks[task_list.current_task].state = S_RUNNING;
+	SCB->ICSR |= SCB_ICSR_PENDSVSET_Msk; //Invoca la ISR de PendSV
 }
 
 static void activate_waiting_tasks()
@@ -217,13 +242,13 @@ static void idle_task(void)
 
 void SysTick_Handler(void)
 {
+	task_list.global_tick++; //incrementa el reloj global en 1
 #ifdef RTOS_ENABLE_IS_ALIVE
 	refresh_is_alive();
 #endif
-	task_list.global_tick++; //incrementa el reloj global en 1
 	activate_waiting_tasks();	//activate waiting tasks()
 	reload_systick();
-	dispatcher(kFromISR);	//dispatcher(desde interrupción);
+	dispatcher(kFromISR);	//dispatcher(desde interrupción)
 }
 
 void PendSV_Handler(void)
@@ -231,7 +256,7 @@ void PendSV_Handler(void)
 	//Carga el stack pointer del procesador con el stack pointer de la tarea actual
 	register int32_t r0 asm("r0");
 	(void) r0;
-	SCB->ICSR |= SCB_ICSR_PENDSVCLR_Msk;
+	SCB->ICSR |= SCB_ICSR_PENDSVCLR_Msk; //Set de la interrupcion
 	r0=(int32_t) task_list.tasks[task_list.current_task].sp;
 	asm("mov r7,r0");
 }
